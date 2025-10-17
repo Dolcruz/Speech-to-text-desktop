@@ -152,6 +152,7 @@ class SettingsDialog(QtWidgets.QDialog):
 class MainWindow(QtWidgets.QMainWindow):
     start_stop_requested = QtCore.Signal()
     cancel_requested = QtCore.Signal()
+    file_transcription_requested = QtCore.Signal(str)
     correct_text_requested = QtCore.Signal(str, object)  # (text, callback_dialog)
     dialog_mode_requested = QtCore.Signal()  # Request to open dialog mode
 
@@ -229,6 +230,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._cancel_btn.setProperty("type", "danger")
         self._cancel_btn.setMinimumHeight(48)
         
+        self._import_btn = QtWidgets.QPushButton("Audio-Datei transkribieren")
+        self._import_btn.setMinimumHeight(48)
+        
         # Settings button with gear icon
         self._settings_btn = QtWidgets.QPushButton("⚙ Einstellungen")
         self._settings_btn.setMinimumHeight(48)
@@ -251,6 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """)
         
         self._btn_row.addWidget(self._start_btn, 3)
+        self._btn_row.addWidget(self._import_btn, 2)
         self._btn_row.addWidget(self._cancel_btn, 1)
         self._btn_row.addWidget(self._dialog_btn, 2)
         self._btn_row.addWidget(self._settings_btn, 2)
@@ -307,6 +312,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Wire
         self._start_btn.clicked.connect(self.start_stop_requested.emit)
+        self._import_btn.clicked.connect(self._open_file_for_transcription)
         self._cancel_btn.clicked.connect(self.cancel_requested.emit)
         self._dialog_btn.clicked.connect(self.dialog_mode_requested.emit)
         self._settings_btn.clicked.connect(self._open_settings)
@@ -319,6 +325,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._history_path = get_app_dir() / "history.json"
         self._history_data = []  # Store full history data
         self._load_history()
+
+    def _open_file_for_transcription(self) -> None:
+        filters = "Audio-Dateien (*.wav *.mp3 *.m4a *.ogg *.flac *.mp4 *.mpeg *.mpga *.webm);;Alle Dateien (*.*)"
+        start_dir = str(Path.home())
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Audio-Datei auswählen",
+            start_dir,
+            filters,
+        )
+        if file_path:
+            self.file_transcription_requested.emit(file_path)
 
     # History persistence (simple JSON array)
     def _load_history(self) -> None:

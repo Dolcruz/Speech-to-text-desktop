@@ -63,6 +63,7 @@ class Controller(QtCore.QObject):
         self.window.cancel_requested.connect(self.cancel_recording)
         self.window.correct_text_requested.connect(self.correct_history_text)
         self.window.dialog_mode_requested.connect(self.open_dialog_mode)
+        self.window.file_transcription_requested.connect(self._transcribe_selected_audio)
         self.overlay.cancel_requested.connect(self.cancel_recording)
         
         # Hook visual settings button
@@ -156,29 +157,54 @@ class Controller(QtCore.QObject):
         self.window.set_status(f"Audiofehler: {message}")
         self.window.set_recording_state(False)
 
-    @QtCore.Slot(str)
-    def _start_transcription(self, wav_path_str: str) -> None:
-        self.overlay.hide()
-        self.window.set_status("Transkribiere…")
+    def _transcribe_audio_path(self, audio_path: Path, cleanup_after: bool) -> None:
+        audio_path = audio_path.expanduser()
+        if audio_path.exists():
+            try:
+                audio_path = audio_path.resolve()
+            except Exception:
+                pass
+        else:
+            self.window.set_status(f"Datei nicht gefunden: {audio_path}")
+            return
 
-        def worker() -> None:
+        display_name = audio_path.name
+        self.overlay.hide()
+        self.window.set_status(f"Transkribiere {display_name}...")
+        self.window.set_recording_state(False)
+
+        def worker(path: Path, remove_after: bool) -> None:
             text = ""
             try:
-                result = self.transcriber.transcribe_wav(Path(wav_path_str))
+                result = self.transcriber.transcribe_wav(path)
                 text = result.text or ""
             except Exception as exc:
                 text = f"Fehler bei der Transkription: {exc}"
             finally:
-                # Clean up temp file
-                try:
-                    Path(wav_path_str).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                if remove_after:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             QtCore.QMetaObject.invokeMethod(
                 self, "_show_result", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, text)
             )
 
-        threading.Thread(target=worker, name="TranscriptionThread", daemon=True).start()
+        threading.Thread(
+            target=worker,
+            args=(audio_path, cleanup_after),
+            name="TranscriptionThread",
+            daemon=True,
+        ).start()
+
+    @QtCore.Slot(str)
+    def _start_transcription(self, wav_path_str: str) -> None:
+        self._transcribe_audio_path(Path(wav_path_str), cleanup_after=True)
+
+    @QtCore.Slot(str)
+    def _transcribe_selected_audio(self, file_path: str) -> None:
+        self._transcribe_audio_path(Path(file_path), cleanup_after=False)
+
 
     @QtCore.Slot(str)
     def _show_result(self, text: str) -> None:
