@@ -327,7 +327,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._load_history()
 
     def _open_file_for_transcription(self) -> None:
-        filters = "Audio-Dateien (*.wav *.mp3 *.m4a *.ogg *.flac *.mp4 *.mpeg *.mpga *.webm);;Alle Dateien (*.*)"
+        filters = "Audio-Dateien (*.wav *.mp3 *.m4a *.ogg *.opus *.flac *.mp4 *.mpeg *.mpga *.webm);;Alle Dateien (*.*)"
         start_dir = str(Path.home())
         file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,

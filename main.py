@@ -10,6 +10,8 @@ from PySide6 import QtCore, QtWidgets, QtGui
 from stt_app.config import load_settings, save_settings, get_api_key_secure
 from stt_app.logger import configure_logging
 from stt_app.audio import AudioRecorder, RecorderCallbacks
+from stt_app.audio_convert import convert_opus_to_mp3, AudioConversionError
+from stt_app.ffmpeg_manager import ensure_ffmpeg
 from stt_app.groq_client import GroqTranscriber
 from stt_app.hotkeys import HotkeyManager
 from stt_app.ui_main import MainWindow
@@ -46,6 +48,9 @@ class Controller(QtCore.QObject):
         # Dialog mode state
         self._dialog_mode_active = False
         self._dialog_current_lang = "Deutsch"
+        
+        # FFmpeg setup
+        self._setup_ffmpeg()
 
         self.recorder = AudioRecorder(
             settings=self.settings,
@@ -82,6 +87,25 @@ class Controller(QtCore.QObject):
 
         # Register global hotkeys in a background thread to avoid any UI freeze
         threading.Thread(target=self._register_hotkeys_bg, name="HotkeyRegister", daemon=True).start()
+    
+    def _setup_ffmpeg(self) -> None:
+        """Stellt sicher, dass FFmpeg verfügbar ist"""
+        def check_ffmpeg():
+            try:
+                logger.info("Prüfe FFmpeg-Verfügbarkeit...")
+                if ensure_ffmpeg():
+                    logger.info("FFmpeg ist verfügbar")
+                    # Optional: UI-Benachrichtigung anzeigen
+                    QtCore.QTimer.singleShot(0, lambda: self.window.set_status("FFmpeg bereit"))
+                else:
+                    logger.warning("FFmpeg konnte nicht installiert werden")
+                    QtCore.QTimer.singleShot(0, lambda: self.window.set_status("FFmpeg-Installation fehlgeschlagen"))
+            except Exception as e:
+                logger.error("FFmpeg-Setup fehlgeschlagen: %s", e)
+                QtCore.QTimer.singleShot(0, lambda: self.window.set_status("FFmpeg-Setup fehlgeschlagen"))
+        
+        # FFmpeg-Check im Hintergrund durchführen
+        threading.Thread(target=check_ffmpeg, daemon=True).start()
 
     def _register_hotkeys_bg(self) -> None:
         def do_register():
@@ -169,6 +193,20 @@ class Controller(QtCore.QObject):
             return
 
         display_name = audio_path.name
+        remove_after = cleanup_after
+
+        if audio_path.suffix.lower() == ".opus":
+            self.window.set_status(f"Konvertiere {display_name}...")
+            try:
+                audio_path = convert_opus_to_mp3(audio_path)
+                remove_after = True
+                display_name = f"{display_name} (konvertiert)"
+            except AudioConversionError as exc:
+                self.overlay.hide()
+                self.window.set_recording_state(False)
+                self.window.set_status(f"Konvertierung fehlgeschlagen: {exc}")
+                return
+
         self.overlay.hide()
         self.window.set_status(f"Transkribiere {display_name}...")
         self.window.set_recording_state(False)
@@ -192,7 +230,7 @@ class Controller(QtCore.QObject):
 
         threading.Thread(
             target=worker,
-            args=(audio_path, cleanup_after),
+            args=(audio_path, remove_after),
             name="TranscriptionThread",
             daemon=True,
         ).start()
