@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from typing import List, Optional
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
@@ -239,9 +240,99 @@ class Controller(QtCore.QObject):
     def _start_transcription(self, wav_path_str: str) -> None:
         self._transcribe_audio_path(Path(wav_path_str), cleanup_after=True)
 
-    @QtCore.Slot(str)
-    def _transcribe_selected_audio(self, file_path: str) -> None:
-        self._transcribe_audio_path(Path(file_path), cleanup_after=False)
+    @QtCore.Slot(list)
+    def _transcribe_selected_audio(self, file_paths: List[str]) -> None:
+        """Handle multiple files selected for transcription."""
+        if not file_paths:
+            return
+            
+        # Convert all to Path objects
+        paths = [Path(p) for p in file_paths]
+        
+        # Start batch processing
+        self._process_batch(paths)
+
+    def _process_batch(self, file_paths: List[Path]) -> None:
+        """Process a batch of files sequentially in a background thread."""
+        self.overlay.hide()
+        self.window.set_recording_state(False)
+        
+        def worker(paths: List[Path]) -> None:
+            results = []
+            total = len(paths)
+            
+            for i, path in enumerate(paths, 1):
+                # Update status
+                msg = f"Verarbeite Datei {i} von {total}: {path.name}..."
+                QtCore.QMetaObject.invokeMethod(
+                    self.window, "set_status", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, msg)
+                )
+                
+                # Process single file (synchronous logic extracted here)
+                try:
+                    text = self._transcribe_single_file_sync(path)
+                    if text:
+                        results.append(f"--- {path.name} ---\n{text}")
+                except Exception as e:
+                    results.append(f"--- {path.name} ---\nFehler: {e}")
+            
+            # Combine results
+            final_text = "\n\n".join(results)
+            
+            # Show result
+            QtCore.QMetaObject.invokeMethod(
+                self, "_show_result", QtCore.Qt.QueuedConnection, QtCore.Q_ARG(str, final_text)
+            )
+
+        threading.Thread(
+            target=worker,
+            args=(file_paths,),
+            name="BatchTranscriptionThread",
+            daemon=True,
+        ).start()
+
+    def _transcribe_single_file_sync(self, audio_path: Path) -> str:
+        """Synchronous helper to transcribe a single file (runs in worker thread)."""
+        audio_path = audio_path.expanduser()
+        if audio_path.exists():
+            try:
+                audio_path = audio_path.resolve()
+            except Exception:
+                pass
+        else:
+            return f"Datei nicht gefunden: {audio_path}"
+
+        display_name = audio_path.name
+        temp_file_created = False
+
+        try:
+            # Convert opus if needed
+            if audio_path.suffix.lower() == ".opus":
+                QtCore.QMetaObject.invokeMethod(
+                    self.window, "set_status", QtCore.Qt.QueuedConnection, 
+                    QtCore.Q_ARG(str, f"Konvertiere {display_name}...")
+                )
+                audio_path = convert_opus_to_mp3(audio_path)
+                temp_file_created = True
+                display_name = f"{display_name} (konvertiert)"
+
+            # Transcribe
+            QtCore.QMetaObject.invokeMethod(
+                self.window, "set_status", QtCore.Qt.QueuedConnection, 
+                QtCore.Q_ARG(str, f"Transkribiere {display_name}...")
+            )
+            
+            result = self.transcriber.transcribe_wav(audio_path)
+            return result.text or ""
+            
+        except Exception as exc:
+            return f"Fehler: {exc}"
+        finally:
+            if temp_file_created:
+                try:
+                    audio_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
 
     @QtCore.Slot(str)
