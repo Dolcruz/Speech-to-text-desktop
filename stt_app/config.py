@@ -72,6 +72,11 @@ class AppSettings:
     # Grammar correction
     auto_grammar_correction: bool = False  # Automatic grammar correction after transcription
 
+    # Wake word settings
+    wake_word_enabled: bool = False  # Enable always-listening wake word detection
+    wake_word_model: str = "hey_jarvis"  # Which wake word to listen for
+    wake_word_threshold: float = 0.5  # Detection confidence threshold (0-1)
+
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2)
 

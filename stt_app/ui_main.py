@@ -45,6 +45,27 @@ class SettingsDialog(QtWidgets.QDialog):
         self._auto_grammar_cb = QtWidgets.QCheckBox("Grammatik automatisch korrigieren")
         self._auto_grammar_cb.setChecked(settings.auto_grammar_correction)
 
+        # Wake word settings
+        self._wake_word_cb = QtWidgets.QCheckBox("Wake Word aktivieren (Always Listening)")
+        self._wake_word_cb.setChecked(settings.wake_word_enabled)
+
+        self._wake_word_combo = QtWidgets.QComboBox()
+        self._wake_word_combo.addItem("Hey Jarvis", "hey_jarvis")
+        self._wake_word_combo.addItem("Alexa", "alexa")
+        self._wake_word_combo.addItem("Hey Mycroft", "hey_mycroft")
+        self._wake_word_combo.addItem("Hey Rhasspy", "hey_rhasspy")
+        # Set current selection
+        for i in range(self._wake_word_combo.count()):
+            if self._wake_word_combo.itemData(i) == settings.wake_word_model:
+                self._wake_word_combo.setCurrentIndex(i)
+                break
+
+        self._wake_word_threshold = QtWidgets.QDoubleSpinBox()
+        self._wake_word_threshold.setRange(0.1, 0.9)
+        self._wake_word_threshold.setSingleStep(0.05)
+        self._wake_word_threshold.setValue(settings.wake_word_threshold)
+        self._wake_word_threshold.setToolTip("Höher = weniger false positives, niedriger = empfindlicher")
+
         self._max_dur_spin = QtWidgets.QSpinBox()
         # Allow 0 = unlimited; keep an upper sanity cap
         self._max_dur_spin.setRange(0, 24 * 60 * 60)
@@ -71,7 +92,10 @@ class SettingsDialog(QtWidgets.QDialog):
         
         ux_header = QtWidgets.QLabel("Verhalten")
         ux_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #ffffff; padding-top: 12px;")
-        
+
+        wake_word_header = QtWidgets.QLabel("Wake Word (Always Listening)")
+        wake_word_header.setStyleSheet("font-size: 12pt; font-weight: 600; color: #ffffff; padding-top: 12px;")
+
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignLeft)
         form.setVerticalSpacing(12)
@@ -92,6 +116,11 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow(self._auto_copy_cb)
         form.addRow(self._auto_paste_cb)
         form.addRow(self._auto_grammar_cb)
+
+        form.addRow(wake_word_header)
+        form.addRow(self._wake_word_cb)
+        form.addRow("Wake Word:", self._wake_word_combo)
+        form.addRow("Empfindlichkeit:", self._wake_word_threshold)
 
         btns = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -147,6 +176,10 @@ class SettingsDialog(QtWidgets.QDialog):
         s.auto_grammar_correction = self._auto_grammar_cb.isChecked()
         # Save selected device index
         s.input_device_index = self._device_combo.currentData()
+        # Wake word settings
+        s.wake_word_enabled = self._wake_word_cb.isChecked()
+        s.wake_word_model = self._wake_word_combo.currentData()
+        s.wake_word_threshold = float(self._wake_word_threshold.value())
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -155,6 +188,7 @@ class MainWindow(QtWidgets.QMainWindow):
     file_transcription_requested = QtCore.Signal(list)
     correct_text_requested = QtCore.Signal(str, object)  # (text, callback_dialog)
     dialog_mode_requested = QtCore.Signal()  # Request to open dialog mode
+    wake_word_settings_changed = QtCore.Signal()  # Notify controller of wake word settings change
 
     def __init__(self, settings: Optional[AppSettings] = None) -> None:
         super().__init__()
@@ -394,11 +428,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_btn.style().polish(self._start_btn)
 
     def _open_settings(self) -> None:
+        # Store old wake word settings to detect changes
+        old_wake_word_enabled = self.settings.wake_word_enabled
+        old_wake_word_model = self.settings.wake_word_model
+        old_wake_word_threshold = self.settings.wake_word_threshold
+
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec() == QtWidgets.QDialog.Accepted:
             dlg.apply()
             save_settings(self.settings)
             self.set_status("Einstellungen gespeichert")
+
+            # Check if wake word settings changed
+            if (self.settings.wake_word_enabled != old_wake_word_enabled or
+                self.settings.wake_word_model != old_wake_word_model or
+                self.settings.wake_word_threshold != old_wake_word_threshold):
+                self.wake_word_settings_changed.emit()
 
     def show_tray_tip(self) -> None:
         try:

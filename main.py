@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtWidgets, QtGui
 from stt_app.config import load_settings, save_settings, get_api_key_secure
 from stt_app.logger import configure_logging
 from stt_app.audio import AudioRecorder, RecorderCallbacks
+from stt_app.wakeword import WakeWordDetector
 from stt_app.audio_convert import convert_opus_to_mp3, AudioConversionError
 from stt_app.ffmpeg_manager import ensure_ffmpeg
 from stt_app.groq_client import GroqTranscriber
@@ -49,7 +50,11 @@ class Controller(QtCore.QObject):
         # Dialog mode state
         self._dialog_mode_active = False
         self._dialog_current_lang = "Deutsch"
-        
+
+        # Wake word detector
+        self._wake_word_detector: Optional[WakeWordDetector] = None
+        self._setup_wake_word()
+
         # FFmpeg setup
         self._setup_ffmpeg()
 
@@ -67,6 +72,7 @@ class Controller(QtCore.QObject):
         # Hook UI signals first
         self.window.start_stop_requested.connect(self.toggle_recording)
         self.window.cancel_requested.connect(self.cancel_recording)
+        self.window.wake_word_settings_changed.connect(self._on_wake_word_settings_changed)
         self.window.correct_text_requested.connect(self.correct_history_text)
         self.window.dialog_mode_requested.connect(self.open_dialog_mode)
         self.window.file_transcription_requested.connect(self._transcribe_selected_audio)
@@ -104,9 +110,67 @@ class Controller(QtCore.QObject):
             except Exception as e:
                 logger.error("FFmpeg-Setup fehlgeschlagen: %s", e)
                 QtCore.QTimer.singleShot(0, lambda: self.window.set_status("FFmpeg-Setup fehlgeschlagen"))
-        
+
         # FFmpeg-Check im Hintergrund durchführen
         threading.Thread(target=check_ffmpeg, daemon=True).start()
+
+    def _setup_wake_word(self) -> None:
+        """Initialize wake word detector if enabled in settings."""
+        if not self.settings.wake_word_enabled:
+            logger.info("Wake word detection disabled")
+            return
+
+        def setup():
+            try:
+                logger.info("Setting up wake word detector...")
+                self._wake_word_detector = WakeWordDetector(
+                    wake_word=self.settings.wake_word_model,
+                    threshold=self.settings.wake_word_threshold,
+                    on_detected=self._on_wake_word_detected,
+                    sample_rate=self.settings.sample_rate_hz,
+                    input_device_index=self.settings.input_device_index,
+                )
+                if self._wake_word_detector.start():
+                    QtCore.QMetaObject.invokeMethod(
+                        self.window, "set_status", QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, f"Wake Word aktiv: '{self.settings.wake_word_model}'")
+                    )
+                else:
+                    error = self._wake_word_detector.get_model_error() or "Unbekannter Fehler"
+                    QtCore.QMetaObject.invokeMethod(
+                        self.window, "set_status", QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, f"Wake Word Fehler: {error}")
+                    )
+            except Exception as e:
+                logger.error("Wake word setup failed: %s", e)
+                QtCore.QMetaObject.invokeMethod(
+                    self.window, "set_status", QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, f"Wake Word Fehler: {e}")
+                )
+
+        # Setup in background to avoid blocking UI
+        threading.Thread(target=setup, daemon=True, name="WakeWordSetup").start()
+
+    def _on_wake_word_detected(self) -> None:
+        """Called when wake word is detected - start recording."""
+        logger.info("Wake word detected! Starting recording...")
+        # Invoke toggle_recording on UI thread
+        QtCore.QMetaObject.invokeMethod(
+            self, "toggle_recording", QtCore.Qt.QueuedConnection
+        )
+
+    @QtCore.Slot()
+    def _on_wake_word_settings_changed(self) -> None:
+        """Handle wake word settings changes from UI."""
+        logger.info("Wake word settings changed, reconfiguring...")
+
+        # Stop existing detector
+        if self._wake_word_detector is not None:
+            self._wake_word_detector.stop()
+            self._wake_word_detector = None
+
+        # Setup new detector if enabled
+        self._setup_wake_word()
 
     def _register_hotkeys_bg(self) -> None:
         def do_register():
@@ -170,6 +234,9 @@ class Controller(QtCore.QObject):
         self.overlay.hide()
         self.window.set_status("Abgebrochen")
         self.window.set_recording_state(False)
+        # Resume wake word detection
+        if self._wake_word_detector is not None:
+            self._wake_word_detector.resume()
 
     def _on_record_error(self, message: str) -> None:
         QtCore.QMetaObject.invokeMethod(
@@ -181,6 +248,9 @@ class Controller(QtCore.QObject):
         self.overlay.hide()
         self.window.set_status(f"Audiofehler: {message}")
         self.window.set_recording_state(False)
+        # Resume wake word detection after error
+        if self._wake_word_detector is not None:
+            self._wake_word_detector.resume()
 
     def _transcribe_audio_path(self, audio_path: Path, cleanup_after: bool) -> None:
         audio_path = audio_path.expanduser()
@@ -378,6 +448,10 @@ class Controller(QtCore.QObject):
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         self.window.append_history(timestamp, popup.get_text(), self.settings.history_limit)
 
+        # Resume wake word detection after popup is closed
+        if self._wake_word_detector is not None:
+            self._wake_word_detector.resume()
+
     def _correct_grammar_sync(self, text: str) -> str:
         """Synchronously correct grammar of text (runs in UI thread)."""
         try:
@@ -563,6 +637,9 @@ class Controller(QtCore.QObject):
             self.window.set_recording_state(False)
             self.recorder.stop()
             return
+        # Pause wake word detection while recording to avoid conflicts
+        if self._wake_word_detector is not None:
+            self._wake_word_detector.pause()
         # Start
         started = self.recorder.start()
         if started:
@@ -576,6 +653,9 @@ class Controller(QtCore.QObject):
             self.window.set_status("Abbreche…")
             self.window.set_recording_state(False)
             self.recorder.cancel()
+            # Resume wake word detection after cancel
+            if self._wake_word_detector is not None:
+                self._wake_word_detector.resume()
     
     @QtCore.Slot()
     def open_visual_settings(self) -> None:
