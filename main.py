@@ -25,6 +25,8 @@ from stt_app.tts_client import TTSClient, VOICE_OPTIONS
 from stt_app.updater import check_for_updates, download_update, install_update
 from stt_app.theme import apply_dark_theme
 
+logger = logging.getLogger(__name__)
+
 
 class Controller(QtCore.QObject):
     """Glue layer connecting hotkeys, recorder, transcriber, and UI."""
