@@ -129,6 +129,7 @@ class Controller(QtCore.QObject):
                     wake_word=self.settings.wake_word_model,
                     threshold=self.settings.wake_word_threshold,
                     on_detected=self._on_wake_word_detected,
+                    on_score_update=self._on_wake_word_score,
                     sample_rate=self.settings.sample_rate_hz,
                     input_device_index=self.settings.input_device_index,
                 )
@@ -152,6 +153,22 @@ class Controller(QtCore.QObject):
 
         # Setup in background to avoid blocking UI
         threading.Thread(target=setup, daemon=True, name="WakeWordSetup").start()
+
+    def _on_wake_word_score(self, model_name: str, score: float) -> None:
+        """Called with live score updates from wake word detector."""
+        # Only update UI every 200ms to avoid flooding
+        if not hasattr(self, '_last_score_update'):
+            self._last_score_update = 0.0
+
+        now = time.time()
+        if now - self._last_score_update >= 0.2:
+            self._last_score_update = now
+            # Show score in status bar
+            status = f"Wake Word: {model_name} | Score: {score:.3f} | Threshold: {self.settings.wake_word_threshold:.2f}"
+            QtCore.QMetaObject.invokeMethod(
+                self.window, "set_status", QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, status)
+            )
 
     def _on_wake_word_detected(self) -> None:
         """Called when wake word is detected - start recording."""

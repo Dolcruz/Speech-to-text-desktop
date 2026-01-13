@@ -41,6 +41,7 @@ class WakeWordDetector:
         wake_word: str = "hey_jarvis",
         threshold: float = DEFAULT_THRESHOLD,
         on_detected: Optional[Callable[[], None]] = None,
+        on_score_update: Optional[Callable[[str, float], None]] = None,
         sample_rate: int = 16000,
         input_device_index: Optional[int] = None,
     ) -> None:
@@ -50,14 +51,20 @@ class WakeWordDetector:
             wake_word: Which wake word to listen for (key from AVAILABLE_WAKE_WORDS)
             threshold: Confidence threshold (0-1) for triggering detection
             on_detected: Callback invoked when wake word is detected
+            on_score_update: Callback for live score updates (model_name, score)
             sample_rate: Audio sample rate (must be 16000 for OpenWakeWord)
             input_device_index: Optional specific input device to use
         """
         self.wake_word = wake_word
         self.threshold = threshold
         self.on_detected = on_detected
+        self.on_score_update = on_score_update
         self.sample_rate = sample_rate
         self.input_device_index = input_device_index
+
+        # Debug: track max score for periodic logging
+        self._max_score_seen = 0.0
+        self._last_debug_log = 0.0
 
         self._model = None
         self._thread: Optional[threading.Thread] = None
@@ -222,13 +229,33 @@ class WakeWordDetector:
 
                         # Check if wake word detected
                         for model_name, score in prediction.items():
+                            # Track max score for debug
+                            if score > self._max_score_seen:
+                                self._max_score_seen = score
+
+                            # Send score update callback
+                            if self.on_score_update:
+                                try:
+                                    self.on_score_update(model_name, score)
+                                except Exception:
+                                    pass
+
+                            # Debug log every 5 seconds with max score seen
+                            now = time.time()
+                            if now - self._last_debug_log >= 5.0:
+                                logger.info(
+                                    "Wake word '%s' - current: %.3f, max seen: %.3f, threshold: %.2f",
+                                    model_name, score, self._max_score_seen, self.threshold
+                                )
+                                self._last_debug_log = now
+                                self._max_score_seen = 0.0  # Reset max after logging
+
                             if score >= self.threshold:
                                 # Check cooldown
-                                now = time.time()
                                 if now - self._last_detection_time >= self._cooldown_seconds:
                                     self._last_detection_time = now
                                     logger.info(
-                                        "Wake word '%s' detected with confidence %.2f",
+                                        "Wake word '%s' TRIGGERED with confidence %.2f",
                                         model_name, score
                                     )
                                     if self.on_detected:
