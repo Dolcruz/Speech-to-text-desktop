@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # GitHub repository information
 GITHUB_OWNER = "Dolcruz"
-GITHUB_REPO = "stt-desktop"
+GITHUB_REPO = "Speech-to-text-desktop"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 
 
@@ -116,25 +116,38 @@ def download_update(download_url: str, progress_callback=None) -> Optional[Path]
     try:
         logger.info(f"Downloading update from {download_url}")
         
-        # Download to temp directory
+        # Download to app update directory
         response = requests.get(download_url, stream=True, timeout=30)
         response.raise_for_status()
         
         total_size = int(response.headers.get("content-length", 0))
         downloaded = 0
         
-        # Save to temp file
-        temp_file = Path.home() / "Downloads" / "STTDesktop_Update.exe"
-        temp_file.parent.mkdir(parents=True, exist_ok=True)
+        from .config import get_app_dir
+        update_dir = get_app_dir() / "updates"
+        update_dir.mkdir(parents=True, exist_ok=True)
+        temp_file = update_dir / "STTDesktop_Update.exe"
+        partial_file = update_dir / "STTDesktop_Update.exe.part"
+
+        if partial_file.exists():
+            try:
+                partial_file.unlink()
+            except Exception:
+                pass
         
-        with open(temp_file, "wb") as f:
+        with open(partial_file, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
                     if progress_callback:
                         progress_callback(downloaded, total_size)
-        
+
+        if total_size and downloaded != total_size:
+            partial_file.unlink(missing_ok=True)
+            raise RuntimeError(f"Incomplete download ({downloaded}/{total_size} bytes)")
+
+        partial_file.replace(temp_file)
         logger.info(f"Update downloaded to {temp_file}")
         return temp_file
         
@@ -253,4 +266,3 @@ del /F /Q "%~f0"
     except Exception as e:
         logger.error(f"Error installing update: {e}")
         return False
-
