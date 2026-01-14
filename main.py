@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 class Controller(QtCore.QObject):
     """Glue layer connecting hotkeys, recorder, transcriber, and UI."""
 
+    # Signal for wake word score updates (thread-safe) - model, score, audio_level, device_name
+    wake_word_score_signal = QtCore.Signal(str, float, float, str)
+
     def __init__(self, app: QtWidgets.QApplication) -> None:
         super().__init__()
         self.app = app
@@ -55,6 +58,8 @@ class Controller(QtCore.QObject):
 
         # Wake word detector
         self._wake_word_detector: Optional[WakeWordDetector] = None
+        self._last_score_update = 0.0
+        self.wake_word_score_signal.connect(self._update_wake_word_status)
         self._setup_wake_word()
 
         # FFmpeg setup
@@ -120,55 +125,60 @@ class Controller(QtCore.QObject):
         """Initialize wake word detector if enabled in settings."""
         if not self.settings.wake_word_enabled:
             logger.info("Wake word detection disabled")
+            self.window.hide_wake_word_score()
             return
+
+        # Get device name for initial display
+        import sounddevice as sd
+        try:
+            if self.settings.input_device_index is not None:
+                device_info = sd.query_devices(self.settings.input_device_index)
+                init_device_name = device_info.get('name', f'Device {self.settings.input_device_index}')
+            else:
+                device_info = sd.query_devices(kind='input')
+                init_device_name = device_info.get('name', 'Default')
+        except Exception:
+            init_device_name = "Unbekannt"
+
+        # Show initial "loading" state immediately
+        self.window.set_wake_word_score(self.settings.wake_word_model, 0.0, self.settings.wake_word_threshold, 0.0, init_device_name)
 
         def setup():
             try:
                 logger.info("Setting up wake word detector...")
+                # Force 16kHz for OpenWakeWord
                 self._wake_word_detector = WakeWordDetector(
                     wake_word=self.settings.wake_word_model,
                     threshold=self.settings.wake_word_threshold,
                     on_detected=self._on_wake_word_detected,
                     on_score_update=self._on_wake_word_score,
-                    sample_rate=self.settings.sample_rate_hz,
+                    sample_rate=16000,  # OpenWakeWord requires exactly 16kHz
                     input_device_index=self.settings.input_device_index,
                 )
                 if self._wake_word_detector.start():
-                    QtCore.QMetaObject.invokeMethod(
-                        self.window, "set_status", QtCore.Qt.QueuedConnection,
-                        QtCore.Q_ARG(str, f"Wake Word aktiv: '{self.settings.wake_word_model}'")
-                    )
+                    logger.info("Wake word detector started successfully")
                 else:
                     error = self._wake_word_detector.get_model_error() or "Unbekannter Fehler"
-                    QtCore.QMetaObject.invokeMethod(
-                        self.window, "set_status", QtCore.Qt.QueuedConnection,
-                        QtCore.Q_ARG(str, f"Wake Word Fehler: {error}")
-                    )
+                    logger.error("Wake word detector failed to start: %s", error)
             except Exception as e:
                 logger.error("Wake word setup failed: %s", e)
-                QtCore.QMetaObject.invokeMethod(
-                    self.window, "set_status", QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, f"Wake Word Fehler: {e}")
-                )
 
         # Setup in background to avoid blocking UI
         threading.Thread(target=setup, daemon=True, name="WakeWordSetup").start()
 
-    def _on_wake_word_score(self, model_name: str, score: float) -> None:
-        """Called with live score updates from wake word detector."""
+    def _on_wake_word_score(self, model_name: str, score: float, audio_level: float, device_name: str) -> None:
+        """Called with live score updates from wake word detector (from background thread)."""
         # Only update UI every 200ms to avoid flooding
-        if not hasattr(self, '_last_score_update'):
-            self._last_score_update = 0.0
-
         now = time.time()
         if now - self._last_score_update >= 0.2:
             self._last_score_update = now
-            # Show score in status bar
-            status = f"Wake Word: {model_name} | Score: {score:.3f} | Threshold: {self.settings.wake_word_threshold:.2f}"
-            QtCore.QMetaObject.invokeMethod(
-                self.window, "set_status", QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, status)
-            )
+            # Emit signal to update UI on main thread
+            self.wake_word_score_signal.emit(model_name, score, audio_level, device_name)
+
+    @QtCore.Slot(str, float, float, str)
+    def _update_wake_word_status(self, model_name: str, score: float, audio_level: float, device_name: str) -> None:
+        """Update wake word score display (runs on main thread)."""
+        self.window.set_wake_word_score(model_name, score, self.settings.wake_word_threshold, audio_level, device_name)
 
     def _on_wake_word_detected(self) -> None:
         """Called when wake word is detected - start recording."""
@@ -187,6 +197,9 @@ class Controller(QtCore.QObject):
         if self._wake_word_detector is not None:
             self._wake_word_detector.stop()
             self._wake_word_detector = None
+
+        # Hide label first
+        self.window.hide_wake_word_score()
 
         # Setup new detector if enabled
         self._setup_wake_word()

@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 from typing import Optional
 
@@ -83,7 +83,9 @@ class AppSettings:
     @staticmethod
     def from_json(data: str) -> "AppSettings":
         raw = json.loads(data)
-        return AppSettings(**raw)
+        allowed = {field.name for field in fields(AppSettings)}
+        filtered = {key: value for key, value in raw.items() if key in allowed}
+        return AppSettings(**filtered)
 
 
 def load_settings() -> AppSettings:

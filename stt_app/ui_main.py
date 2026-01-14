@@ -75,6 +75,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self._silence_thresh.setRange(0.0, 1.0)
         self._silence_thresh.setSingleStep(0.01)
         self._silence_thresh.setValue(settings.silence_threshold_rms)
+        self._silence_min_spin = QtWidgets.QDoubleSpinBox()
+        self._silence_min_spin.setRange(0.0, 30.0)
+        self._silence_min_spin.setSingleStep(0.1)
+        self._silence_min_spin.setValue(settings.silence_min_seconds)
+        self._silence_min_spin.setToolTip("Wie lange es still sein muss, bevor automatisch gestoppt wird")
+        self._stop_on_silence_cb = QtWidgets.QCheckBox("Aufnahme bei Stille beenden")
+        self._stop_on_silence_cb.setChecked(settings.stop_on_silence)
 
         # Device selection
         self._device_combo = QtWidgets.QComboBox()
@@ -108,6 +115,8 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("Mikrofon:", self._device_combo)
         form.addRow("Max. Dauer (Sekunden):", self._max_dur_spin)
         form.addRow("Stille-Schwelle (RMS):", self._silence_thresh)
+        form.addRow("Stille-Dauer (Sekunden):", self._silence_min_spin)
+        form.addRow(self._stop_on_silence_cb)
         
         form.addRow(hotkey_header)
         form.addRow("Hotkey (z.B. alt+t):", self._hotkey_edit)
@@ -171,6 +180,8 @@ class SettingsDialog(QtWidgets.QDialog):
         s.toggle_hotkey = self._hotkey_edit.text().strip() or s.toggle_hotkey
         s.max_duration_seconds = int(self._max_dur_spin.value())
         s.silence_threshold_rms = float(self._silence_thresh.value())
+        s.silence_min_seconds = float(self._silence_min_spin.value())
+        s.stop_on_silence = self._stop_on_silence_cb.isChecked()
         s.auto_copy = self._auto_copy_cb.isChecked()
         s.auto_paste = self._auto_paste_cb.isChecked()
         s.auto_grammar_correction = self._auto_grammar_cb.isChecked()
@@ -245,6 +256,23 @@ class MainWindow(QtWidgets.QMainWindow):
             border-radius: 8px;
             padding: 10px 14px;
         """)
+
+        # Wake word score display (prominent, always visible when wake word enabled)
+        self._wake_word_label = QtWidgets.QLabel("")
+        self._wake_word_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._wake_word_label.setStyleSheet("""
+            QLabel {
+                font-size: 14pt;
+                font-weight: 700;
+                color: #00ff88;
+                background-color: #1a2a1a;
+                border: 2px solid #2a4a2a;
+                border-radius: 10px;
+                padding: 15px 20px;
+                margin: 5px 0px;
+            }
+        """)
+        self._wake_word_label.hide()  # Hidden by default
         
         self._history = QtWidgets.QListWidget()
         # Connect double-click to show full text
@@ -307,6 +335,7 @@ class MainWindow(QtWidgets.QMainWindow):
         content_l.setSpacing(16)
         content_l.addWidget(self._status_label)
         content_l.addWidget(info_label)
+        content_l.addWidget(self._wake_word_label)
         content_l.addLayout(self._btn_row)
         
         history_label = QtWidgets.QLabel("Verlauf")
@@ -414,6 +443,44 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
         self._tray.setToolTip(text)
+
+    def set_wake_word_score(self, model: str, score: float, threshold: float, audio_level: float = 0.0, device_name: str = "") -> None:
+        """Update the wake word score display."""
+        self._wake_word_label.show()
+        # Color based on how close to threshold
+        if score >= threshold:
+            color = "#00ff00"  # Green - triggered!
+            bg = "#1a3a1a"
+        elif score >= threshold * 0.7:
+            color = "#ffff00"  # Yellow - close
+            bg = "#2a2a1a"
+        elif audio_level < 10:
+            color = "#ff4444"  # Red - no audio!
+            bg = "#2a1a1a"
+        else:
+            color = "#00ff88"  # Cyan - normal
+            bg = "#1a2a1a"
+
+        self._wake_word_label.setStyleSheet(f"""
+            QLabel {{
+                font-size: 12pt;
+                font-weight: 700;
+                color: {color};
+                background-color: {bg};
+                border: 2px solid #2a4a2a;
+                border-radius: 10px;
+                padding: 12px 16px;
+                margin: 5px 0px;
+            }}
+        """)
+        # Show audio level and device name to debug microphone issues
+        audio_status = "🔇 KEIN AUDIO!" if audio_level < 10 else f"🔊 {audio_level:.0f}"
+        device_short = device_name[:25] + "..." if len(device_name) > 28 else device_name
+        self._wake_word_label.setText(f"🎤 {model}  |  Score: {score:.3f}  |  {audio_status}  |  Device: {device_short}")
+
+    def hide_wake_word_score(self) -> None:
+        """Hide the wake word score display."""
+        self._wake_word_label.hide()
     
     def set_recording_state(self, is_recording: bool) -> None:
         """Update UI to reflect recording state."""
@@ -428,10 +495,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._start_btn.style().polish(self._start_btn)
 
     def _open_settings(self) -> None:
-        # Store old wake word settings to detect changes
+        # Store old settings to detect changes
         old_wake_word_enabled = self.settings.wake_word_enabled
         old_wake_word_model = self.settings.wake_word_model
         old_wake_word_threshold = self.settings.wake_word_threshold
+        old_input_device_index = self.settings.input_device_index
 
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec() == QtWidgets.QDialog.Accepted:
@@ -439,10 +507,11 @@ class MainWindow(QtWidgets.QMainWindow):
             save_settings(self.settings)
             self.set_status("Einstellungen gespeichert")
 
-            # Check if wake word settings changed
+            # Check if wake word settings OR input device changed
             if (self.settings.wake_word_enabled != old_wake_word_enabled or
                 self.settings.wake_word_model != old_wake_word_model or
-                self.settings.wake_word_threshold != old_wake_word_threshold):
+                self.settings.wake_word_threshold != old_wake_word_threshold or
+                self.settings.input_device_index != old_input_device_index):
                 self.wake_word_settings_changed.emit()
 
     def show_tray_tip(self) -> None:

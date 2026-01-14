@@ -14,6 +14,9 @@ from typing import Callable, Optional, List
 
 import numpy as np
 import sounddevice as sd
+from scipy import signal
+
+from .config import get_app_dir
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ class WakeWordDetector:
         wake_word: str = "hey_jarvis",
         threshold: float = DEFAULT_THRESHOLD,
         on_detected: Optional[Callable[[], None]] = None,
-        on_score_update: Optional[Callable[[str, float], None]] = None,
+        on_score_update: Optional[Callable[[str, float, float, str], None]] = None,  # (model, score, audio_level, device_name)
         sample_rate: int = 16000,
         input_device_index: Optional[int] = None,
     ) -> None:
@@ -62,6 +65,19 @@ class WakeWordDetector:
         self.sample_rate = sample_rate
         self.input_device_index = input_device_index
 
+        # Get device name immediately
+        try:
+            if input_device_index is not None:
+                device_info = sd.query_devices(input_device_index)
+                self.device_name = device_info.get('name', f'Device {input_device_index}')
+            else:
+                device_info = sd.query_devices(kind='input')
+                self.device_name = device_info.get('name', 'Default')
+        except Exception as e:
+            self.device_name = f"Error: {e}"
+
+        logger.info("WakeWordDetector created with device_index=%s, device_name=%s", input_device_index, self.device_name)
+
         # Debug: track max score for periodic logging
         self._max_score_seen = 0.0
         self._last_debug_log = 0.0
@@ -81,6 +97,22 @@ class WakeWordDetector:
         self._model_loaded = False
         self._model_error: Optional[str] = None
 
+    def _download_model_if_missing(self, url: str, dest: Path) -> None:
+        if dest.exists():
+            return
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Downloading wake word model file: %s", dest.name)
+        try:
+            import requests
+            with requests.get(url, stream=True, timeout=30) as response:
+                response.raise_for_status()
+                with open(dest, "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if chunk:
+                            handle.write(chunk)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to download {url}: {exc}") from exc
+
     def _ensure_model(self) -> bool:
         """Lazy-load the OpenWakeWord model.
 
@@ -94,15 +126,38 @@ class WakeWordDetector:
             import openwakeword
             from openwakeword.model import Model
 
-            # Download models if not present
-            logger.info("Downloading OpenWakeWord models if needed...")
-            openwakeword.utils.download_models()
+            model_dir = get_app_dir() / "wakeword_models"
+            inference_framework = "onnx"
+
+            def to_model_url(url: str) -> str:
+                if inference_framework == "onnx":
+                    return url.replace(".tflite", ".onnx")
+                return url
+
+            wake_model = openwakeword.MODELS.get(self.wake_word)
+            if not wake_model:
+                raise ValueError(f"Unknown wake word model: {self.wake_word}")
+
+            wake_url = to_model_url(wake_model["download_url"])
+            melspec_url = to_model_url(openwakeword.FEATURE_MODELS["melspectrogram"]["download_url"])
+            embed_url = to_model_url(openwakeword.FEATURE_MODELS["embedding"]["download_url"])
+
+            wake_path = model_dir / Path(wake_url).name
+            melspec_path = model_dir / Path(melspec_url).name
+            embed_path = model_dir / Path(embed_url).name
+
+            logger.info("Ensuring wake word models in %s", model_dir)
+            self._download_model_if_missing(melspec_url, melspec_path)
+            self._download_model_if_missing(embed_url, embed_path)
+            self._download_model_if_missing(wake_url, wake_path)
 
             # Load the model
             logger.info("Loading wake word model: %s", self.wake_word)
             self._model = Model(
-                wakeword_models=[self.wake_word],
-                inference_framework="onnx"  # Use ONNX on Windows
+                wakeword_models=[str(wake_path)],
+                inference_framework=inference_framework,
+                melspec_model_path=str(melspec_path),
+                embedding_model_path=str(embed_path),
             )
             self._model_loaded = True
             logger.info("Wake word model loaded successfully")
@@ -183,22 +238,70 @@ class WakeWordDetector:
 
     def _run(self) -> None:
         """Main detection loop running in background thread."""
-        # Audio settings for OpenWakeWord
-        chunk_size = int(self.sample_rate * 0.08)  # 80ms chunks
+        # OpenWakeWord requires 16kHz; prefer 16kHz input, fall back to native and resample.
+        target_rate = 16000  # Required by OpenWakeWord
+        native_rate = 44100  # Common microphone rate (HyperX QuadCast etc.)
+
+        # Determine which device to use
+        device_to_use = self.input_device_index
+        logger.info("Wake word using device index: %s", device_to_use)
+
+        # Try to get actual device sample rate
+        try:
+            if device_to_use is not None:
+                device_info = sd.query_devices(device_to_use)
+                self.device_name = device_info.get('name', 'Unknown')
+            else:
+                device_info = sd.query_devices(kind='input')
+                self.device_name = device_info.get('name', 'Default')
+            logger.info("Using device: %s", self.device_name)
+            native_rate = int(device_info['default_samplerate'])
+            logger.info("Device sample rate: %d Hz", native_rate)
+        except Exception as e:
+            logger.warning("Could not query device sample rate, using %d: %s", native_rate, e)
+            self.device_name = "Error"
+
+        # Prefer 16kHz capture to avoid resampling; fall back to native if unsupported.
+        stream_rate = target_rate
+        try:
+            sd.check_input_settings(
+                device=device_to_use,
+                samplerate=target_rate,
+                channels=1,
+                dtype="float32",
+            )
+            logger.info("Using 16kHz input stream for wake word detection")
+        except Exception as e:
+            stream_rate = native_rate
+            logger.info(
+                "16kHz input not supported, using native %d Hz: %s",
+                native_rate,
+                e,
+            )
+
+        # Calculate chunk sizes
+        stream_chunk_size = int(stream_rate * 0.08)  # 80ms at stream rate
 
         try:
-            # Set up audio stream
+            # Set up audio stream at chosen stream rate
             stream_kwargs = {
                 "channels": 1,
-                "samplerate": self.sample_rate,
-                "dtype": "int16",
-                "blocksize": chunk_size,
+                "samplerate": stream_rate,
+                "dtype": "float32",
+                "blocksize": 0,  # let sounddevice choose a safe blocksize
             }
-            if self.input_device_index is not None:
-                stream_kwargs["device"] = self.input_device_index
+            if device_to_use is not None:
+                stream_kwargs["device"] = device_to_use
+                logger.info("Opening stream with device %d", device_to_use)
+            else:
+                logger.info("Opening stream with default device")
 
             with sd.InputStream(**stream_kwargs) as stream:
-                logger.info("Wake word audio stream opened")
+                logger.info(
+                    "Wake word audio stream opened at %d Hz (target %d Hz)",
+                    stream_rate,
+                    target_rate,
+                )
 
                 while not self._stop_event.is_set():
                     # Wait if paused
@@ -211,7 +314,7 @@ class WakeWordDetector:
 
                     # Read audio chunk
                     try:
-                        audio_data, overflowed = stream.read(chunk_size)
+                        audio_data, overflowed = stream.read(stream_chunk_size)
                         if overflowed:
                             logger.debug("Audio buffer overflow")
                             continue
@@ -222,6 +325,26 @@ class WakeWordDetector:
 
                     # Convert to format expected by OpenWakeWord
                     audio_array = audio_data.flatten()
+                    if audio_array.size == 0:
+                        continue
+                    if np.issubdtype(audio_array.dtype, np.floating):
+                        audio_float = audio_array.astype(np.float32)
+                    else:
+                        audio_float = audio_array.astype(np.float32) / 32768.0
+
+                    # Debug: check if we're getting actual audio (before resampling)
+                    audio_level = float(np.sqrt(np.mean(np.square(audio_float))) * 32767.0)
+
+                    # Resample from native rate to 16kHz if needed
+                    if stream_rate != target_rate:
+                        # Calculate number of samples after resampling
+                        num_samples = int(len(audio_float) * target_rate / stream_rate)
+                        if num_samples <= 0:
+                            continue
+                        audio_float = signal.resample(audio_float, num_samples)
+
+                    # Convert back to int16 for OpenWakeWord
+                    audio_array = np.clip(audio_float * 32767.0, -32768, 32767).astype(np.int16)
 
                     # Run prediction
                     try:
@@ -233,10 +356,10 @@ class WakeWordDetector:
                             if score > self._max_score_seen:
                                 self._max_score_seen = score
 
-                            # Send score update callback
+                            # Send score update callback (with audio level for debugging)
                             if self.on_score_update:
                                 try:
-                                    self.on_score_update(model_name, score)
+                                    self.on_score_update(model_name, score, audio_level, self.device_name)
                                 except Exception:
                                     pass
 
