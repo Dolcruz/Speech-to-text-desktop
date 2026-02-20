@@ -2,8 +2,6 @@ import threading
 import logging
 from typing import Callable, Optional
 
-import keyboard
-
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +17,33 @@ class HotkeyManager:
         self._toggle_str: Optional[str] = None
         self._cancel_str: Optional[str] = None
         self._lock = threading.Lock()
+        self._keyboard = None
+
+    def _ensure_keyboard(self):
+        if self._keyboard is None:
+            import keyboard
+
+            self._keyboard = keyboard
+        return self._keyboard
+
+    def _unregister_locked(self) -> None:
+        keyboard = self._keyboard
+        if self._toggle_id is not None:
+            try:
+                if keyboard is not None:
+                    keyboard.remove_hotkey(self._toggle_id)
+            except Exception:
+                pass
+            self._toggle_id = None
+        if self._cancel_id is not None:
+            try:
+                if keyboard is not None:
+                    keyboard.remove_hotkey(self._cancel_id)
+            except Exception:
+                pass
+            self._cancel_id = None
+        self._toggle_str = None
+        self._cancel_str = None
 
     def register(self, toggle_hotkey: str, cancel_key: str, on_toggle: Callable[[], None], on_cancel: Callable[[], None]) -> bool:
         """Register global hotkeys. Returns True if registration succeeded.
@@ -29,9 +54,10 @@ class HotkeyManager:
         """
         ok = True
         with self._lock:
-            self.unregister()
+            self._unregister_locked()
             self._toggle_str = toggle_hotkey
             self._cancel_str = cancel_key
+            keyboard = self._ensure_keyboard()
             
             # Try to register toggle hotkey
             try:
@@ -65,25 +91,12 @@ class HotkeyManager:
 
     def unregister(self) -> None:
         with self._lock:
-            if self._toggle_id is not None:
-                try:
-                    keyboard.remove_hotkey(self._toggle_id)
-                except Exception:
-                    pass
-                self._toggle_id = None
-            if self._cancel_id is not None:
-                try:
-                    keyboard.remove_hotkey(self._cancel_id)
-                except Exception:
-                    pass
-                self._cancel_id = None
-            self._toggle_str = None
-            self._cancel_str = None
+            self._unregister_locked()
 
-    @staticmethod
-    def send_paste() -> None:
+    def send_paste(self) -> None:
         """Send Ctrl+V to paste clipboard into the focused window."""
         try:
+            keyboard = self._ensure_keyboard()
             keyboard.send("ctrl+v")
         except Exception as exc:
             logger.warning("Failed to send paste: %s", exc)

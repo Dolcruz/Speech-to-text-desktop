@@ -4,25 +4,15 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
-from stt_app.config import load_settings, save_settings, get_api_key_secure
+from stt_app.config import load_settings, save_settings
 from stt_app.logger import configure_logging
-from stt_app.audio import AudioRecorder, RecorderCallbacks
-from stt_app.wakeword import WakeWordDetector
-from stt_app.audio_convert import convert_opus_to_mp3, AudioConversionError
-from stt_app.ffmpeg_manager import ensure_ffmpeg
-from stt_app.groq_client import GroqTranscriber
 from stt_app.hotkeys import HotkeyManager
 from stt_app.ui_main import MainWindow
 from stt_app.ui_overlay import RecordingOverlay
-from stt_app.ui_result_popup import ResultPopup
-from stt_app.ui_dialog import DialogWindow
-from stt_app.ui_update import UpdateDialog
-from stt_app.tts_client import TTSClient, VOICE_OPTIONS
-from stt_app.updater import check_for_updates, download_update, install_update
 from stt_app.theme import apply_dark_theme
 
 logger = logging.getLogger(__name__)
@@ -41,7 +31,7 @@ class Controller(QtCore.QObject):
 
         self.window = MainWindow(self.settings)
         self.overlay = RecordingOverlay()
-        self.dialog_window: Optional[DialogWindow] = None
+        self.dialog_window: Optional[object] = None
         
         # Apply saved visualization settings
         self.overlay._particle_sphere.set_particle_count(self.settings.particle_count)
@@ -49,32 +39,23 @@ class Controller(QtCore.QObject):
         self.overlay._particle_sphere.set_color_hue(self.settings.particle_color_hue)
         
         self.hotkeys = HotkeyManager()
-        self.transcriber = GroqTranscriber(self.settings)
-        self.tts_client = TTSClient()  # No API key needed - edge-tts is free!
+        self.transcriber = None
+        self.recorder = None
+        self.tts_client = None
+        self._voice_options: Dict[str, str] = {}
         
         # Dialog mode state
         self._dialog_mode_active = False
         self._dialog_current_lang = "Deutsch"
 
         # Wake word detector
-        self._wake_word_detector: Optional[WakeWordDetector] = None
+        self._wake_word_detector: Optional[object] = None
         self._last_score_update = 0.0
         self.wake_word_score_signal.connect(self._update_wake_word_status)
         self._setup_wake_word()
 
         # FFmpeg setup
         self._setup_ffmpeg()
-
-        self.recorder = AudioRecorder(
-            settings=self.settings,
-            callbacks=RecorderCallbacks(
-                on_level=self._on_level,
-                on_time=self._on_time,
-                on_stopped=self._on_stopped,
-                on_cancelled=self._on_cancelled,
-                on_error=self._on_record_error,
-            ),
-        )
 
         # Hook UI signals first
         self.window.start_stop_requested.connect(self.toggle_recording)
@@ -95,17 +76,54 @@ class Controller(QtCore.QObject):
         self.window.activateWindow()
         QtCore.QTimer.singleShot(300, self.window.show_tray_tip)
         self.window.set_status("Bereit")
+        logger.info("Main window shown; startup UI ready")
         
         # Check for updates after a short delay (non-blocking)
         QtCore.QTimer.singleShot(2000, self._check_for_updates)
 
         # Register global hotkeys in a background thread to avoid any UI freeze
         threading.Thread(target=self._register_hotkeys_bg, name="HotkeyRegister", daemon=True).start()
+
+    def _get_transcriber(self):
+        if self.transcriber is None:
+            from stt_app.groq_client import GroqTranscriber
+
+            self.transcriber = GroqTranscriber(self.settings)
+        return self.transcriber
+
+    def _ensure_recorder(self):
+        if self.recorder is None:
+            from stt_app.audio import AudioRecorder, RecorderCallbacks
+
+            self.recorder = AudioRecorder(
+                settings=self.settings,
+                callbacks=RecorderCallbacks(
+                    on_level=self._on_level,
+                    on_time=self._on_time,
+                    on_stopped=self._on_stopped,
+                    on_cancelled=self._on_cancelled,
+                    on_error=self._on_record_error,
+                ),
+            )
+        return self.recorder
+
+    def _is_recording(self) -> bool:
+        return self.recorder is not None and self.recorder.is_recording()
+
+    def _ensure_tts(self):
+        if self.tts_client is None:
+            from stt_app.tts_client import TTSClient, VOICE_OPTIONS
+
+            self.tts_client = TTSClient()
+            self._voice_options = dict(VOICE_OPTIONS)
+        return self.tts_client
     
     def _setup_ffmpeg(self) -> None:
         """Stellt sicher, dass FFmpeg verfügbar ist"""
         def check_ffmpeg():
             try:
+                from stt_app.ffmpeg_manager import ensure_ffmpeg
+
                 logger.info("Prüfe FFmpeg-Verfügbarkeit...")
                 if ensure_ffmpeg():
                     logger.info("FFmpeg ist verfügbar")
@@ -128,23 +146,19 @@ class Controller(QtCore.QObject):
             self.window.hide_wake_word_score()
             return
 
-        # Get device name for initial display
-        import sounddevice as sd
-        try:
-            if self.settings.input_device_index is not None:
-                device_info = sd.query_devices(self.settings.input_device_index)
-                init_device_name = device_info.get('name', f'Device {self.settings.input_device_index}')
-            else:
-                device_info = sd.query_devices(kind='input')
-                init_device_name = device_info.get('name', 'Default')
-        except Exception:
-            init_device_name = "Unbekannt"
-
-        # Show initial "loading" state immediately
-        self.window.set_wake_word_score(self.settings.wake_word_model, 0.0, self.settings.wake_word_threshold, 0.0, init_device_name)
+        # Show initial loading state immediately; device discovery happens in background.
+        self.window.set_wake_word_score(
+            self.settings.wake_word_model,
+            0.0,
+            self.settings.wake_word_threshold,
+            0.0,
+            "Wird initialisiert...",
+        )
 
         def setup():
             try:
+                from stt_app.wakeword import WakeWordDetector
+
                 logger.info("Setting up wake word detector...")
                 # Force 16kHz for OpenWakeWord
                 self._wake_word_detector = WakeWordDetector(
@@ -155,6 +169,20 @@ class Controller(QtCore.QObject):
                     sample_rate=16000,  # OpenWakeWord requires exactly 16kHz
                     input_device_index=self.settings.input_device_index,
                 )
+
+                # Refresh UI with resolved device name.
+                device_name = getattr(self._wake_word_detector, "device_name", "Unbekannt")
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda: self.window.set_wake_word_score(
+                        self.settings.wake_word_model,
+                        0.0,
+                        self.settings.wake_word_threshold,
+                        0.0,
+                        device_name,
+                    ),
+                )
+
                 if self._wake_word_detector.start():
                     logger.info("Wake word detector started successfully")
                 else:
@@ -301,6 +329,8 @@ class Controller(QtCore.QObject):
         if audio_path.suffix.lower() == ".opus":
             self.window.set_status(f"Konvertiere {display_name}...")
             try:
+                from stt_app.audio_convert import AudioConversionError, convert_opus_to_mp3
+
                 audio_path = convert_opus_to_mp3(audio_path)
                 remove_after = True
                 display_name = f"{display_name} (konvertiert)"
@@ -317,7 +347,7 @@ class Controller(QtCore.QObject):
         def worker(path: Path, remove_after: bool) -> None:
             text = ""
             try:
-                result = self.transcriber.transcribe_wav(path)
+                result = self._get_transcriber().transcribe_wav(path)
                 text = result.text or ""
             except Exception as exc:
                 text = f"Fehler bei der Transkription: {exc}"
@@ -414,6 +444,8 @@ class Controller(QtCore.QObject):
                     self.window, "set_status", QtCore.Qt.QueuedConnection, 
                     QtCore.Q_ARG(str, f"Konvertiere {display_name}...")
                 )
+                from stt_app.audio_convert import convert_opus_to_mp3
+
                 audio_path = convert_opus_to_mp3(audio_path)
                 temp_file_created = True
                 display_name = f"{display_name} (konvertiert)"
@@ -424,7 +456,7 @@ class Controller(QtCore.QObject):
                 QtCore.Q_ARG(str, f"Transkribiere {display_name}...")
             )
             
-            result = self.transcriber.transcribe_wav(audio_path)
+            result = self._get_transcriber().transcribe_wav(audio_path)
             return result.text or ""
             
         except Exception as exc:
@@ -439,6 +471,8 @@ class Controller(QtCore.QObject):
 
     @QtCore.Slot(str)
     def _show_result(self, text: str) -> None:
+        from stt_app.ui_result_popup import ResultPopup
+
         self.window.set_status("Fertig")
         self.window.set_recording_state(False)
         
@@ -487,12 +521,12 @@ class Controller(QtCore.QObject):
     def _correct_grammar_sync(self, text: str) -> str:
         """Synchronously correct grammar of text (runs in UI thread)."""
         try:
-            return self.transcriber.correct_grammar(text)
+            return self._get_transcriber().correct_grammar(text)
         except Exception as e:
             logging.getLogger(__name__).error(f"Grammar correction failed: {e}")
             return text  # Return original text on error
     
-    def _on_process_text(self, popup: ResultPopup, text: str, target_language: str) -> None:
+    def _on_process_text(self, popup: object, text: str, target_language: str) -> None:
         """Handle combined correction and optional translation request.
         
         If target_language is empty, only corrects grammar.
@@ -500,12 +534,14 @@ class Controller(QtCore.QObject):
         """
         def worker():
             try:
+                transcriber = self._get_transcriber()
+
                 # Step 1: Always correct grammar first
-                corrected = self.transcriber.correct_grammar(text)
+                corrected = transcriber.correct_grammar(text)
                 
                 # Step 2: If target language specified, translate the corrected text
                 if target_language:
-                    final_text = self.transcriber.translate_text(corrected, target_language)
+                    final_text = transcriber.translate_text(corrected, target_language)
                 else:
                     final_text = corrected
                 
@@ -533,15 +569,17 @@ class Controller(QtCore.QObject):
         """Handle combined correction & translation request from history dialog."""
         def worker():
             try:
+                transcriber = self._get_transcriber()
+
                 # Get target language from dialog (empty string = no translation)
                 target_language = getattr(dialog, '_target_language', '')
                 
                 # Step 1: Always correct grammar first
-                corrected = self.transcriber.correct_grammar(text)
+                corrected = transcriber.correct_grammar(text)
                 
                 # Step 2: If target language specified, translate the corrected text
                 if target_language:
-                    final_text = self.transcriber.translate_text(corrected, target_language)
+                    final_text = transcriber.translate_text(corrected, target_language)
                 else:
                     final_text = corrected
                 
@@ -560,6 +598,8 @@ class Controller(QtCore.QObject):
     @QtCore.Slot()
     def open_dialog_mode(self) -> None:
         """Open the dialog mode window for two-way translation."""
+        from stt_app.ui_dialog import DialogWindow
+
         if self.dialog_window is not None:
             # Already open, just bring to front
             self.dialog_window.show()
@@ -582,15 +622,15 @@ class Controller(QtCore.QObject):
         self.dialog_window.set_status(f"Aufnahme läuft ({current_lang})...")
         
         # Use standard recording with overlay
-        if not self.recorder.is_recording():
-            self.recorder.start()
+        if not self._is_recording():
+            self._ensure_recorder().start()
             self.overlay.show()  # Show overlay, not start()
     
     @QtCore.Slot()
     def _dialog_stop_recording(self) -> None:
         """Stop recording for dialog mode."""
-        if self.recorder.is_recording():
-            self.recorder.stop()
+        if self._is_recording():
+            self._ensure_recorder().stop()
     
     @QtCore.Slot()
     def _dialog_closed(self) -> None:
@@ -607,15 +647,17 @@ class Controller(QtCore.QObject):
         
         def worker():
             try:
+                transcriber = self._get_transcriber()
+
                 # Get target language from dialog window
                 target_lang = self.dialog_window.get_target_language()
                 current_speaker = self.dialog_window.get_current_speaker()
                 
                 # Step 1: Correct grammar
-                corrected = self.transcriber.correct_grammar(original_text)
+                corrected = transcriber.correct_grammar(original_text)
                 
                 # Step 2: Translate to target language
-                translated = self.transcriber.translate_text(corrected, target_lang)
+                translated = transcriber.translate_text(corrected, target_lang)
                 
                 # Step 3: Update UI on main thread
                 QtCore.QMetaObject.invokeMethod(
@@ -624,8 +666,9 @@ class Controller(QtCore.QObject):
                 )
                 
                 # Step 4: Text-to-Speech and play (blocking)
-                voice = VOICE_OPTIONS.get(target_lang, "de-DE-KatjaNeural")
-                self.tts_client.text_to_speech_and_play(translated, voice=voice)
+                tts_client = self._ensure_tts()
+                voice = self._voice_options.get(target_lang, "de-DE-KatjaNeural")
+                tts_client.text_to_speech_and_play(translated, voice=voice)
                 
                 # Step 5: Add to history and switch speaker
                 QtCore.QMetaObject.invokeMethod(
@@ -664,16 +707,18 @@ class Controller(QtCore.QObject):
     # Public controls
     @QtCore.Slot()
     def toggle_recording(self) -> None:
-        if self.recorder.is_recording():
+        recorder = self._ensure_recorder()
+
+        if self._is_recording():
             self.window.set_status("Stoppe Aufnahme…")
             self.window.set_recording_state(False)
-            self.recorder.stop()
+            recorder.stop()
             return
         # Pause wake word detection while recording to avoid conflicts
         if self._wake_word_detector is not None:
             self._wake_word_detector.pause()
         # Start
-        started = self.recorder.start()
+        started = recorder.start()
         if started:
             self.overlay.show_top_right()
             self.window.set_status("Aufnahme läuft… (Alt+T zum Stoppen)")
@@ -681,10 +726,10 @@ class Controller(QtCore.QObject):
 
     @QtCore.Slot()
     def cancel_recording(self) -> None:
-        if self.recorder.is_recording():
+        if self._is_recording():
             self.window.set_status("Abbreche…")
             self.window.set_recording_state(False)
-            self.recorder.cancel()
+            self._ensure_recorder().cancel()
             # Resume wake word detection after cancel
             if self._wake_word_detector is not None:
                 self._wake_word_detector.resume()
@@ -790,6 +835,8 @@ class Controller(QtCore.QObject):
         
         def worker():
             try:
+                from stt_app.updater import check_for_updates
+
                 update_info = check_for_updates()
                 if update_info:
                     new_version, download_url, release_notes = update_info
@@ -808,6 +855,7 @@ class Controller(QtCore.QObject):
     @QtCore.Slot(str, str, str)
     def _show_update_dialog(self, new_version: str, download_url: str, release_notes: str) -> None:
         """Show update dialog to user."""
+        from stt_app.ui_update import UpdateDialog
         from stt_app.updater import get_current_version
         
         current_version = get_current_version()
@@ -824,7 +872,7 @@ class Controller(QtCore.QObject):
         
         dialog.exec()
     
-    def _download_update(self, dialog: UpdateDialog, download_url: str) -> None:
+    def _download_update(self, dialog: object, download_url: str) -> None:
         """Download update in background thread."""
         def progress_callback(downloaded: int, total: int):
             QtCore.QMetaObject.invokeMethod(
@@ -835,6 +883,8 @@ class Controller(QtCore.QObject):
         
         def worker():
             try:
+                from stt_app.updater import download_update, install_update
+
                 # Download update
                 update_file = download_update(download_url, progress_callback)
                 

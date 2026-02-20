@@ -1,5 +1,8 @@
 # Requires: Python venv activated and pyinstaller installed
 # Usage:  .\build_windows.ps1
+param(
+    [switch]$OneFile
+)
 
 Write-Host "Packaging STTDesktop..."
 
@@ -14,12 +17,27 @@ if ($LASTEXITCODE -ne 0) {
 if (Test-Path dist) { Remove-Item -Recurse -Force dist }
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 
-# Build windowed, onefile; include PySide6 plugins automatically
+# Build windowed; default to onedir for faster startup.
 $iconPath = Join-Path (Get-Location) "assets\app.ico"
+$bundleArg = if ($OneFile) { "--onefile" } else { "--onedir" }
 
-$iconArg = ""
-if (Test-Path $iconPath) { $iconArg = "--icon `"$iconPath`"" }
+$pyInstallerArgs = @(
+    "--noconfirm",
+    "--noconsole",
+    $bundleArg,
+    "--name", "STTDesktop",
+    "--add-data", "VERSION;.",
+    "main.py"
+)
 
-pyinstaller --noconfirm --noconsole --onefile $iconArg --name "STTDesktop" main.py
+if (Test-Path $iconPath) {
+    $pyInstallerArgs += @("--icon", $iconPath)
+}
 
-Write-Host "Build finished. EXE at: dist\STTDesktop.exe"
+pyinstaller @pyInstallerArgs
+
+if ($OneFile) {
+    Write-Host "Build finished. EXE at: dist\\STTDesktop.exe"
+} else {
+    Write-Host "Build finished. EXE at: dist\\STTDesktop\\STTDesktop.exe"
+}

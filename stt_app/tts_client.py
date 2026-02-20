@@ -9,13 +9,8 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Optional
-import edge_tts
-import pygame
 
 logger = logging.getLogger(__name__)
-
-# Initialize pygame mixer for audio playback (Windows-compatible)
-pygame.mixer.init()
 
 
 class TTSClient:
@@ -23,7 +18,15 @@ class TTSClient:
     
     def __init__(self) -> None:
         # No API key needed - edge-tts is completely free!
-        pass
+        self._pygame = None
+    
+    def _ensure_playback_backend(self):
+        if self._pygame is None:
+            import pygame
+
+            pygame.mixer.init()
+            self._pygame = pygame
+        return self._pygame
     
     def is_configured(self) -> bool:
         """Always configured - no API key needed."""
@@ -43,6 +46,8 @@ class TTSClient:
             voice: Voice ID (e.g., 'de-DE-KatjaNeural')
             output_file: Path to save MP3 file
         """
+        import edge_tts
+
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(output_file)
     
@@ -72,6 +77,7 @@ class TTSClient:
             asyncio.run(self._text_to_speech_async(text, voice, tmp_path))
             
             # Play the audio file using pygame (Windows-compatible)
+            pygame = self._ensure_playback_backend()
             logger.info(f"Playing audio from {tmp_path}")
             pygame.mixer.music.load(tmp_path)
             pygame.mixer.music.play()

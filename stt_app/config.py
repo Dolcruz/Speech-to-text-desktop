@@ -5,8 +5,6 @@ from dataclasses import dataclass, asdict, fields
 from pathlib import Path
 from typing import Optional
 
-import keyring
-
 APP_NAME = "STTDesktop"
 SERVICE_NAME = "STTDesktop"
 API_KEY_USERNAME = "api_key"
@@ -118,12 +116,24 @@ def set_api_key_secure(api_key: str) -> None:
     The `groq` SDK reads GROQ_API_KEY from environment. We also export to `os.environ`
     for child libraries that read the env var at runtime.
     """
-    keyring.set_password(SERVICE_NAME, API_KEY_USERNAME, api_key)
+    try:
+        import keyring  # Lazy import to avoid keyring startup overhead
+
+        keyring.set_password(SERVICE_NAME, API_KEY_USERNAME, api_key)
+    except Exception:
+        pass
     os.environ["GROQ_API_KEY"] = api_key
 
 
 def get_api_key_secure() -> Optional[str]:
-    api_key = keyring.get_password(SERVICE_NAME, API_KEY_USERNAME)
+    api_key = None
+    try:
+        import keyring  # Lazy import to avoid keyring startup overhead
+
+        api_key = keyring.get_password(SERVICE_NAME, API_KEY_USERNAME)
+    except Exception:
+        api_key = None
+
     if not api_key:
         # Fallback to environment variable if set
         api_key = os.getenv("GROQ_API_KEY")
