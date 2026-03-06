@@ -1,24 +1,32 @@
-# Requires: Python venv activated and pyinstaller installed
-# Usage:  .\build_windows.ps1
+# Requires: Python available. Prefers .venv\Scripts\python.exe when present.
+# Usage:  .\build_windows.ps1 [-OneFile]
 param(
     [switch]$OneFile
 )
 
+$ErrorActionPreference = 'Stop'
+
 Write-Host "Packaging STTDesktop..."
 
-# Ensure pyinstaller is installed
-pip show pyinstaller > $null 2>&1
+$projectRoot = Get-Location
+$venvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+$pythonCmd = if (Test-Path $venvPython) { $venvPython } else { "python" }
+
+Write-Host "Using Python: $pythonCmd"
+
+& $pythonCmd -m pip show pyinstaller > $null 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Installing PyInstaller..."
-    pip install pyinstaller
+    & $pythonCmd -m pip install pyinstaller
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller installation failed."
+    }
 }
 
-# Clean previous dist/build
 if (Test-Path dist) { Remove-Item -Recurse -Force dist }
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 
-# Build windowed; default to onedir for faster startup.
-$iconPath = Join-Path (Get-Location) "assets\app.ico"
+$iconPath = Join-Path $projectRoot "assets\app.ico"
 $bundleArg = if ($OneFile) { "--onefile" } else { "--onedir" }
 
 $pyInstallerArgs = @(
@@ -34,10 +42,14 @@ if (Test-Path $iconPath) {
     $pyInstallerArgs += @("--icon", $iconPath)
 }
 
-pyinstaller @pyInstallerArgs
-
-if ($OneFile) {
-    Write-Host "Build finished. EXE at: dist\\STTDesktop.exe"
-} else {
-    Write-Host "Build finished. EXE at: dist\\STTDesktop\\STTDesktop.exe"
+& $pythonCmd -m PyInstaller @pyInstallerArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller build failed."
 }
+
+$artifactPath = if ($OneFile) { "dist\STTDesktop.exe" } else { "dist\STTDesktop\STTDesktop.exe" }
+if (-not (Test-Path $artifactPath)) {
+    throw "Build finished without expected artifact at $artifactPath"
+}
+
+Write-Host "Build finished. EXE at: $artifactPath"

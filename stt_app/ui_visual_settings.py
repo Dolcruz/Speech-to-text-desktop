@@ -5,7 +5,7 @@ from PySide6 import QtCore, QtWidgets
 
 
 class VisualSettingsDialog(QtWidgets.QDialog):
-    """Dialog for configuring particle visualization with live preview."""
+    """Dialog for configuring the recording visualization with live preview."""
     
     # Signals for live updates
     particle_count_changed = QtCore.Signal(int)
@@ -32,7 +32,7 @@ class VisualSettingsDialog(QtWidgets.QDialog):
         """)
         
         # Title
-        title = QtWidgets.QLabel("Partikel-Visualisierung anpassen")
+        title = QtWidgets.QLabel("Sphere-Visualisierung anpassen")
         title.setStyleSheet("""
             font-size: 16pt;
             font-weight: 700;
@@ -41,7 +41,7 @@ class VisualSettingsDialog(QtWidgets.QDialog):
         """)
         
         # Info label
-        info = QtWidgets.QLabel("Änderungen werden live angezeigt. Starte eine Aufnahme für Echtzeit-Preview.")
+        info = QtWidgets.QLabel("Detailgrad, Glow und Farbe werden live angezeigt. Starte eine Aufnahme fuer Echtzeit-Preview.")
         info.setStyleSheet("""
             font-size: 9pt;
             color: #a0a0a0;
@@ -49,8 +49,8 @@ class VisualSettingsDialog(QtWidgets.QDialog):
         """)
         info.setWordWrap(True)
         
-        # Particle Count Slider
-        count_label = QtWidgets.QLabel("Anzahl Partikel:")
+        # Detail Slider
+        count_label = QtWidgets.QLabel("Detailgrad:")
         count_label.setStyleSheet("font-size: 11pt; font-weight: 600; color: #ffffff;")
         
         self._count_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -161,7 +161,7 @@ class VisualSettingsDialog(QtWidgets.QDialog):
         self._update_color_preview()
     
     def _on_count_changed(self, value: int) -> None:
-        """Handle particle count slider change."""
+        """Handle detail slider change."""
         self._count_value_label.setText(str(value))
         self.particle_count_changed.emit(value)
     
@@ -196,3 +196,4 @@ class VisualSettingsDialog(QtWidgets.QDialog):
             self._glow_slider.value() / 100.0,
             self._color_slider.value()
         )
+

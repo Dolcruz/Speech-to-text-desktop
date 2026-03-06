@@ -34,9 +34,9 @@ class Controller(QtCore.QObject):
         self.dialog_window: Optional[object] = None
         
         # Apply saved visualization settings
-        self.overlay._particle_sphere.set_particle_count(self.settings.particle_count)
-        self.overlay._particle_sphere.set_glow_intensity(self.settings.glow_intensity)
-        self.overlay._particle_sphere.set_color_hue(self.settings.particle_color_hue)
+        self.overlay.set_particle_count(self.settings.particle_count)
+        self.overlay.set_glow_intensity(self.settings.glow_intensity)
+        self.overlay.set_color_hue(self.settings.particle_color_hue)
         
         self.hotkeys = HotkeyManager()
         self.transcriber = None
@@ -760,8 +760,8 @@ class Controller(QtCore.QObject):
             normalized_level = min(1.0, rms * 50)  # Scale factor like in audio.py
             # Update overlay with REAL audio level
             QtCore.QMetaObject.invokeMethod(
-                self.overlay._particle_sphere, 
-                "set_level", 
+                self.overlay, 
+                "update_level", 
                 QtCore.Qt.QueuedConnection, 
                 QtCore.Q_ARG(float, normalized_level)
             )
@@ -790,9 +790,9 @@ class Controller(QtCore.QObject):
         )
         
         # Connect live update signals
-        dialog.particle_count_changed.connect(self.overlay._particle_sphere.set_particle_count)
-        dialog.glow_intensity_changed.connect(self.overlay._particle_sphere.set_glow_intensity)
-        dialog.color_hue_changed.connect(self.overlay._particle_sphere.set_color_hue)
+        dialog.particle_count_changed.connect(self.overlay.set_particle_count)
+        dialog.glow_intensity_changed.connect(self.overlay.set_glow_intensity)
+        dialog.color_hue_changed.connect(self.overlay.set_color_hue)
         
         # Execute dialog
         result = dialog.exec()
@@ -818,9 +818,9 @@ class Controller(QtCore.QObject):
             self.window.set_status("Visualisierungs-Einstellungen gespeichert")
         else:
             # Reset to saved settings if cancelled
-            self.overlay._particle_sphere.set_particle_count(self.settings.particle_count)
-            self.overlay._particle_sphere.set_glow_intensity(self.settings.glow_intensity)
-            self.overlay._particle_sphere.set_color_hue(self.settings.particle_color_hue)
+            self.overlay.set_particle_count(self.settings.particle_count)
+            self.overlay.set_glow_intensity(self.settings.glow_intensity)
+            self.overlay.set_color_hue(self.settings.particle_color_hue)
             self.window.set_status("Einstellungen verworfen")
     
     # Auto-Update System
@@ -936,3 +936,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

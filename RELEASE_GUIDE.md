@@ -29,7 +29,7 @@ Diese Anleitung ist für **dich** und **jeden**, der ein Update veröffentlichen
    ```
 4. Baue .exe:
    ```powershell
-   pyinstaller --clean STTDesktop.spec
+   .\build_windows.ps1 -OneFile
    ```
 5. Die fertige .exe ist in `dist\STTDesktop.exe`
 
@@ -50,14 +50,14 @@ Diese Anleitung ist für **dich** und **jeden**, der ein Update veröffentlichen
 
 1. Öffne die Datei `VERSION` im Projektordner
 2. Erhöhe die Nummer:
-   - **Bugfix**: `1.0.0` → `1.0.1`
-   - **Neue Features**: `1.0.0` → `1.1.0`
-   - **Große Änderungen**: `1.0.0` → `2.0.0`
+   - **Bugfix**: `1.2.2` → `1.2.3`
+   - **Neue Features**: `1.2.2` → `1.3.0`
+   - **Große Änderungen**: `1.2.2` → `2.0.0`
 3. Speichere die Datei
 4. Committe:
    ```bash
    git add VERSION
-   git commit -m "Bump version to 1.0.1"
+   git commit -m "Bump version to 1.3.0"
    git push
    ```
 
@@ -66,7 +66,7 @@ Diese Anleitung ist für **dich** und **jeden**, der ein Update veröffentlichen
 ## 🎉 **Schritt 4: GitHub Release erstellen (3 Minuten)**
 
 ### **1. Gehe zu GitHub Releases:**
-👉 https://github.com/Dolcruz/stt-desktop/releases
+👉 https://github.com/Dolcruz/Speech-to-text-desktop/releases
 
 ### **2. Klicke auf "Draft a new release"**
 
@@ -74,27 +74,27 @@ Diese Anleitung ist für **dich** und **jeden**, der ein Update veröffentlichen
 
 #### **Tag:**
 - Klicke auf "Choose a tag"
-- Gib ein: **`v1.0.1`** (mit "v" davor!)
-- Klicke "Create new tag: v1.0.1 on publish"
+- Gib ein: **`v1.3.0`** (mit "v" davor!)
+- Klicke "Create new tag: v1.3.0 on publish"
 
 #### **Release title:**
 ```
-Version 1.0.1 - Dialog-Modus & Bugfixes
+Version 1.3.0 - Organic Sphere Overlay
 ```
 
 #### **Release notes:**
 ```markdown
 ## 🆕 Was ist neu?
 
-- ✨ Dialog-Modus mit kostenloser Sprachausgabe
-- 🔄 Automatisches Update-System
-- 🎨 Verbesserte UI
+- ✨ Neue organische Sphere-Visualisierung fuer das Recording-Overlay
+- 🔄 Sanftere Audio-Reaktivitaet mit stabiler Desktop-Performance
+- 🎨 Aktualisierte Release- und Repo-Dokumentation
 
 ## 🐛 Bugfixes
 
-- Windows Audio-Playback behoben
-- Overlay-Fehler behoben
-- Sprecher-Wechsel funktioniert jetzt
+- Overlay-Rendering auf organische Sphere umgestellt
+- Release-Skripte auf den aktuellen Build-Pfad gebracht
+- Repo-Links fuer Downloads und Releases bereinigt
 
 ## 📥 Installation
 
@@ -126,7 +126,7 @@ Version 1.0.1 - Dialog-Modus & Bugfixes
 ### **Neue User:**
 
 - Können direkt auf der Release-Seite die .exe herunterladen
-- Link: https://github.com/Dolcruz/stt-desktop/releases/latest
+- Link: https://github.com/Dolcruz/Speech-to-text-desktop/releases/latest
 
 ---
 
@@ -136,7 +136,7 @@ Version 1.0.1 - Dialog-Modus & Bugfixes
 
 Gib ihnen diesen Link:
 ```
-https://github.com/Dolcruz/stt-desktop/releases/latest/download/STTDesktop.exe
+https://github.com/Dolcruz/Speech-to-text-desktop/releases/latest/download/STTDesktop.exe
 ```
 
 Das ist ein **direkter Download-Link** zur neuesten .exe!
@@ -145,7 +145,7 @@ Das ist ein **direkter Download-Link** zur neuesten .exe!
 
 Füge das zu deinem README.md hinzu:
 ```markdown
-[![Latest Release](https://img.shields.io/github/v/release/Dolcruz/stt-desktop)](https://github.com/Dolcruz/stt-desktop/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/Dolcruz/Speech-to-text-desktop)](https://github.com/Dolcruz/Speech-to-text-desktop/releases/latest)
 ```
 
 ### **Windows Defender Warnung?**
@@ -169,7 +169,7 @@ pip install pyinstaller
 
 ### **"User können nicht updaten"**
 - Prüfe ob `.exe` wirklich `STTDesktop.exe` heißt
-- Prüfe ob Tag mit "v" beginnt (z.B. `v1.0.1`)
+- Prüfe ob Tag mit "v" beginnt (z.B. `v1.3.0`)
 
 ---
 
@@ -180,7 +180,7 @@ pip install pyinstaller
 - [ ] VERSION erhöht
 - [ ] Git committed und gepusht
 - [ ] GitHub Release erstellt
-- [ ] Tag erstellt (z.B. `v1.0.1`)
+- [ ] Tag erstellt (z.B. `v1.3.0`)
 - [ ] Release Notes geschrieben
 - [ ] `STTDesktop.exe` hochgeladen
 - [ ] Release veröffentlicht

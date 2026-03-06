@@ -2,11 +2,11 @@
 
 Desktop-Anwendung für Speech-to-Text-Transkription mit Groq API (Whisper), KI-basierter Grammatikkorrektur, Übersetzung und Dialog-Modus mit Sprachausgabe.
 
-[![Latest Release](https://img.shields.io/github/v/release/Dolcruz/stt-desktop?label=Download)](https://github.com/Dolcruz/stt-desktop/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/Dolcruz/Speech-to-text-desktop?label=Download)](https://github.com/Dolcruz/Speech-to-text-desktop/releases/latest)
 
 ## Download
 
-**Windows-Executable:** [STTDesktop.exe](https://github.com/Dolcruz/stt-desktop/releases/latest/download/STTDesktop.exe)
+**Windows-Executable:** [STTDesktop.exe](https://github.com/Dolcruz/Speech-to-text-desktop/releases/latest/download/STTDesktop.exe)
 
 Die .exe benötigt keine Installation. Bei Windows Defender-Warnung auf "Weitere Informationen" und "Trotzdem ausführen" klicken.
 
@@ -22,8 +22,8 @@ Die .exe benötigt keine Installation. Bei Windows Defender-Warnung auf "Weitere
 
 ### Benutzeroberfläche
 - Dark Mode Design
-- 3D-Partikel-Visualisierung mit Echtzeit-Audio-Feedback
-- Anpassbare Visualisierung (Partikelanzahl, Glow, Farbe)
+- Organische Sphere-Visualisierung mit Echtzeit-Audio-Feedback
+- Anpassbare Visualisierung (Detailgrad, Glow, Farbe)
 - Globale Hotkeys (Alt+T, Esc) - erfordert Administratorrechte
 - Lokale Tastenkombinationen (funktionieren immer bei Fokus)
 
@@ -93,7 +93,7 @@ Ohne Admin-Rechte funktionieren die Hotkeys nur, wenn das Fenster im Fokus ist.
 - Grammatik automatisch korrigieren
 
 ### Visualisierung
-- Partikel-Anzahl (200-1000)
+- Detailgrad (200-1000)
 - Glow-Intensität (0.1-2.0)
 - Farbe (Hue 0-359)
 - Live-Vorschau mit Mikrofon-Input
@@ -107,8 +107,8 @@ Ohne Admin-Rechte funktionieren die Hotkeys nur, wenn das Fenster im Fokus ist.
 ### Installation
 
 ```bash
-git clone https://github.com/Dolcruz/stt-desktop.git
-cd stt-desktop
+git clone https://github.com/Dolcruz/Speech-to-text-desktop.git
+cd Speech-to-text-desktop
 
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -128,7 +128,7 @@ Oder manuell:
 
 ```powershell
 pip install pyinstaller
-pyinstaller --clean --noconfirm STTDesktop.spec
+.\build_windows.ps1 -OneFile
 ```
 
 Resultat: `dist\STTDesktop.exe`
@@ -138,9 +138,9 @@ Resultat: `dist\STTDesktop.exe`
 Siehe [RELEASE_GUIDE.md](RELEASE_GUIDE.md) für Details.
 
 Kurzversion:
-1. VERSION-Datei aktualisieren (z.B. `1.0.5`)
+1. VERSION-Datei aktualisieren (z.B. `1.3.0`)
 2. .exe bauen mit `.\build_release.ps1`
-3. GitHub Release erstellen mit Tag `v1.0.5`
+3. GitHub Release erstellen mit Tag `v1.3.0`
 4. `STTDesktop.exe` als Asset hochladen
 
 Das Auto-Update-System erkennt neue Releases automatisch.
@@ -192,3 +192,4 @@ MIT License - siehe [LICENSE](LICENSE)
 - Groq für API-Zugang
 - Microsoft Edge TTS
 - PySide6/Qt Framework
+
